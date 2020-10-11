@@ -8,15 +8,11 @@
         </div>
         <div id="scatter-gl-container"></div>
       </div>
-      <!-- <HelloWorld/> -->
     </v-main>
   </v-app>
 </template>
 
 <script>
-// import { mapActions } from "vuex";
-// import HelloWorld from './components/HelloWorld';
-// import * as tfjsWasm from '@tensorflow/tfjs-backend-wasm';
 import '@tensorflow/tfjs-backend-webgl';
 import * as tf from '@tensorflow/tfjs-core';
 import * as handpose from '@tensorflow-models/handpose';
@@ -27,12 +23,7 @@ import Stats from 'stats.js';
 //     `https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@$
 //         tfjsWasm.version_wasm}/dist/tfjs-backend-wasm.wasm`);
 
-function isMobile() {
-  const isAndroid = /Android/i.test(navigator.userAgent);
-  const isiOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
-  return isAndroid || isiOS;
-}
-// var ScatterGl = require('node_modules/plotly.js-dist/plotly.js');
+
 let videoWidth, videoHeight, rafID, ctx, canvas, ANCHOR_POINTS,
     scatterGLHasInitialized = false, scatterGL, fingerLookupIndices = {
       thumb: [0, 1, 2, 3, 4],
@@ -42,12 +33,18 @@ let videoWidth, videoHeight, rafID, ctx, canvas, ANCHOR_POINTS,
       pinky: [0, 17, 18, 19, 20]
     };  // for rendering each finger as a polyline
 
+let x_obj = 100, y_obj = 100;
+let x_goal = 550, y_goal = 400;
+let thumbs, pinky, middle;
+let dist_t_p, dist_h_obj, dist_goal_obj;
+let x1, y1, x2, y2, x3, y3;
+
 const VIDEO_WIDTH = 640;
 const VIDEO_HEIGHT = 500;
-const mobile = isMobile();
+
 // Don't render the point cloud on mobile in order to maximize performance and
 // to avoid crowding limited screen space.
-const renderPointcloud = mobile === false;
+const renderPointcloud = true;
 
 const state = {
   backend: 'webgl'
@@ -63,7 +60,7 @@ if (renderPointcloud) {
 
 function setupDatGui(video) {
   const gui = new dat.GUI();
-  gui.add(state, 'backend', ['webgl', 'wasm'])
+  gui.add(state, 'backend', ['webgl'])
       .onChange(async backend => {
         window.cancelAnimationFrame(rafID);
         await tf.setBackend(backend);
@@ -84,23 +81,6 @@ function drawPoint(y, x, r) {
   ctx.fill();
 }
 
-function drawKeypoints(keypoints) {
-  const keypointsArray = keypoints;
-
-  for (let i = 0; i < keypointsArray.length; i++) {
-    const y = keypointsArray[i][0];
-    const x = keypointsArray[i][1];
-    drawPoint(x - 2, y - 2, 3);
-  }
-
-  const fingers = Object.keys(fingerLookupIndices);
-  for (let i = 0; i < fingers.length; i++) {
-    const finger = fingers[i];
-    const points = fingerLookupIndices[finger].map(idx => keypoints[idx]);
-    drawPath(points, false);
-  }
-}
-
 function drawPath(points, closePath) {
   const region = new Path2D();
   region.moveTo(points[0][0], points[0][1]);
@@ -113,6 +93,29 @@ function drawPath(points, closePath) {
     region.closePath();
   }
   ctx.stroke(region);
+}
+
+// Muraishi: Draw hands path
+function drawKeypoints(keypoints) {
+  const keypointsArray = keypoints;
+  for (let i = 0; i < keypointsArray.length; i++) {
+    const y = keypointsArray[i][0];
+    const x = keypointsArray[i][1];
+    drawPoint(x , y , 3);
+  }
+
+  const fingers = Object.keys(fingerLookupIndices);
+  for (let i = 0; i < fingers.length; i++) {
+    const finger = fingers[i];
+    const points = fingerLookupIndices[finger].map(idx => keypoints[idx]);
+    drawPath(points, false);
+  }
+}
+
+function drawObject(y, x, r) {
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, 2 * Math.PI);
+  ctx.fill();
 }
 
 let model;
@@ -130,8 +133,8 @@ async function setupCamera() {
       facingMode: 'user',
       // Only setting the video to a specified size in order to accommodate a
       // point cloud, so on mobile devices accept the default size.
-      width: mobile ? undefined : VIDEO_WIDTH,
-      height: mobile ? undefined : VIDEO_HEIGHT
+      width:  VIDEO_WIDTH,
+      height: VIDEO_HEIGHT
     },
   });
   video.srcObject = stream;
@@ -197,8 +200,8 @@ async function main() {
     //     document.querySelector('#scatter-gl-container'),
     //     {'rotateOnStart': false, 'selectEnabled': false});
   }
-
   landmarksRealTime(video);
+  // objectRealTime();
 }
 
 const landmarksRealTime = async (video) => {
@@ -207,10 +210,46 @@ const landmarksRealTime = async (video) => {
     ctx.drawImage(
         video, 0, 0, videoWidth, videoHeight, 0, 0, canvas.width,
         canvas.height);
+
+    ctx.beginPath();
+    ctx.arc(x_goal, y_goal, 50, 0, 2 * Math.PI);
+    ctx.stroke();
+
+    // muraishi: get predictions from the model
     const predictions = await model.estimateHands(video);
     if (predictions.length > 0) {
       const result = predictions[0].landmarks;
-      drawKeypoints(result, predictions[0].annotations);
+      const result_details = predictions[0].annotations;
+
+      thumbs = result_details.thumb;
+      pinky = result_details.pinky;
+      middle = result_details.middleFinger;
+      console.log(predictions[0]);
+      y1=thumbs[0][0];
+      y2=pinky[0][0];
+      y3=middle[3][0];
+      x1=thumbs[0][1];
+      x2=pinky[0][1];
+      x3=middle[3][1];
+
+      dist_t_p = Math.sqrt(Math.pow(x1-x2,2) + Math.pow(y1-y2,2));
+      dist_h_obj = Math.sqrt(Math.pow(x3-x_obj,2) + Math.pow(y3-y_obj,2));
+
+      if (dist_t_p < 100 && dist_h_obj < 60) {
+        x_obj = x3;
+        y_obj = y3;
+      }
+      dist_goal_obj = Math.sqrt(Math.pow(x_goal-x_obj,2) + Math.pow(y_goal-y_obj,2));
+      if (dist_goal_obj < 100) {
+        ctx.clearRect(0, 0, videoWidth, videoHeight);
+        ctx.strokeStyle = 'blue';
+        ctx.fillStyle = 'blue';
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
+      }
+      drawKeypoints(result, result_details);
+      drawObject(x_obj, y_obj, 30);
+
 
       if (renderPointcloud === true && scatterGL != null) {
         const pointsData = result.map(point => {
@@ -249,21 +288,22 @@ const landmarksRealTime = async (video) => {
 navigator.getUserMedia = navigator.getUserMedia ||
     navigator.webkitGetUserMedia || navigator.mozGetUserMedia;
 
-main();
-
 export default {
   name: 'App',
 
   components: {
     // HelloWorld,
   },
-
-  data: () => ({
-    //
-  }),
+  data: function() {
+    return {
+    };
+  },
   methods: {
   },
   created: function() {
+    main();
+  },
+  mounted: function() {
   }
 };
 </script>
